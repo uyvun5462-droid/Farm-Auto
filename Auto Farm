@@ -1,0 +1,487 @@
+-- Quản lý kết nối hệ thống cũ để tránh bị nhân bản đè script khi dán nhiều lần
+if _G.CharacterAddedConnection then
+    _G.CharacterAddedConnection:Disconnect()
+    _G.CharacterAddedConnection = nil
+end
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- BIẾN TRẠNG THÁI TOÀN CỤC
+local attackMode = "Normal" -- "Normal" (Behind) hoặc "Under" (Down)
+local isTrending = false
+local farmConnection = nil
+local currentTarget = nil
+local isSafeEvading = false
+local safePlatform = nil
+local originalTransparencies = {}
+local originalNameDistances = {}
+local menuOpen = false
+
+local function InitKillFarmScript(autoStart)
+    local RunService = game:GetService("RunService")
+    local StarterGui = game:GetService("StarterGui")
+    local UserInputService = game:GetService("UserInputService")
+    
+    ---------------------------------------------------------------------
+    -- GUI GỐC & CÁC THÀNH PHẦN MỚI THÊM VÀO
+    ---------------------------------------------------------------------
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "KillFarmGui"
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    ScreenGui.ResetOnSpawn = false
+    
+    -- Nút Kill Farm chính (Giữ nguyên cấu trúc cũ của bạn)
+    local KillFarmButton = Instance.new("TextButton")
+    KillFarmButton.Name = "KillFarmButton"
+    KillFarmButton.Parent = ScreenGui
+    KillFarmButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+    KillFarmButton.Position = UDim2.new(0.05, 0, 0.4, 0)
+    KillFarmButton.Size = UDim2.new(0, 120, 0, 50)
+    KillFarmButton.Font = Enum.Font.SourceSansBold
+    KillFarmButton.Text = "Kill Farm"
+    KillFarmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    KillFarmButton.TextSize = 20
+    KillFarmButton.ClipsDescendants = true
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 8)
+    UICorner.Parent = KillFarmButton
+
+    -- Viền Stroke cho nút Kill Farm phục vụ yêu cầu "viền đỏ"
+    local KillFarmStroke = Instance.new("UIStroke")
+    KillFarmStroke.Thickness = 0
+    KillFarmStroke.Color = Color3.fromRGB(255, 0, 0)
+    KillFarmStroke.Parent = KillFarmButton
+
+    -- Dòng chữ màu xám "Relocate the farm" ngay bên dưới text nút chính
+    local RelocateLabel = Instance.new("TextButton")
+    RelocateLabel.Name = "RelocateLabel"
+    RelocateLabel.Parent = ScreenGui
+    RelocateLabel.BackgroundTransparency = 1
+    RelocateLabel.Position = UDim2.new(0.05, 0, 0.4, 55)
+    RelocateLabel.Size = UDim2.new(0, 120, 0, 20)
+    RelocateLabel.Font = Enum.Font.SourceSansItalic
+    RelocateLabel.Text = "Relocate the farm"
+    RelocateLabel.TextColor3 = Color3.fromRGB(150, 150, 150) -- Màu xám
+    RelocateLabel.TextSize = 14
+
+    -- Thanh menu chứa 2 lựa chọn (Nằm ngang bên cạnh dòng chữ xám)
+    local ModeMenuFrame = Instance.new("Frame")
+    ModeMenuFrame.Name = "ModeMenuFrame"
+    ModeMenuFrame.Parent = ScreenGui
+    ModeMenuFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    ModeMenuFrame.Position = UDim2.new(0.05, 125, 0.4, 52)
+    ModeMenuFrame.Size = UDim2.new(0, 190, 0, 26)
+    ModeMenuFrame.Visible = false
+    
+    local UICornerMenu = Instance.new("UICorner")
+    UICornerMenu.CornerRadius = UDim.new(0, 6)
+    UICornerMenu.Parent = ModeMenuFrame
+
+    -- Nút dạng chữ 1: Farm Behind
+    local FarmBehindButton = Instance.new("TextButton")
+    FarmBehindButton.Name = "FarmBehindButton"
+    FarmBehindButton.Parent = ModeMenuFrame
+    FarmBehindButton.BackgroundTransparency = 1
+    FarmBehindButton.Position = UDim2.new(0, 5, 0, 0)
+    FarmBehindButton.Size = UDim2.new(0, 85, 0, 26)
+    FarmBehindButton.Font = Enum.Font.SourceSansBold
+    FarmBehindButton.Text = "Farm Behind"
+    FarmBehindButton.TextColor3 = Color3.fromRGB(52, 152, 219) -- Màu xanh dương
+    FarmBehindButton.TextSize = 14
+
+    -- Nút dạng chữ 2: Farm Down
+    local FarmDownButton = Instance.new("TextButton")
+    FarmDownButton.Name = "FarmDownButton"
+    FarmDownButton.Parent = ModeMenuFrame
+    FarmDownButton.BackgroundTransparency = 1
+    FarmDownButton.Position = UDim2.new(0, 95, 0, 0)
+    FarmDownButton.Size = UDim2.new(0, 90, 0, 26)
+    FarmDownButton.Font = Enum.Font.SourceSansBold
+    FarmDownButton.Text = "Farm Down"
+    FarmDownButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+    FarmDownButton.TextSize = 14
+
+    ---------------------------------------------------------------------
+    -- HÀM CẬP NHẬT CẤU HÌNH MÀU SẮC GIAO DIỆN
+    ---------------------------------------------------------------------
+    local function updateGuiStyles()
+        if attackMode == "Under" then
+            -- Khi chọn Farm Down (phía dưới): Đổi màu GUI nút chính đen, viền đỏ, chữ đỏ
+            KillFarmStroke.Thickness = 2
+            KillFarmButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+            KillFarmButton.TextColor3 = Color3.fromRGB(255, 0, 0)
+            
+            FarmDownButton.TextColor3 = Color3.fromRGB(255, 0, 0)      -- Chữ Farm Down sáng đỏ lên
+            FarmBehindButton.TextColor3 = Color3.fromRGB(120, 120, 120) -- Làm mờ nút Behind
+            
+            if isTrending then KillFarmButton.Text = "Phía Dưới" end
+        else
+            -- Khi ở chế độ mặc định Farm Behind
+            KillFarmStroke.Thickness = 0
+            KillFarmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+            
+            FarmBehindButton.TextColor3 = Color3.fromRGB(52, 152, 219) -- Sáng xanh chế độ bám sau
+            FarmDownButton.TextColor3 = Color3.fromRGB(120, 120, 120)   -- Làm mờ nút Down
+            
+            if isTrending then
+                KillFarmButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+                KillFarmButton.Text = "Dừng Farm"
+            else
+                KillFarmButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+                KillFarmButton.Text = "Kill Farm"
+            end
+        end
+    end
+
+    ---------------------------------------------------------------------
+    -- KÉO THẢ DI CHUYỂN NÚT (Đồng bộ di chuyển cả dòng chữ xám và menu)
+    ---------------------------------------------------------------------
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        local newPos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        KillFarmButton.Position = newPos
+        RelocateLabel.Position = newPos + UDim2.new(0, 0, 0, 55)
+        ModeMenuFrame.Position = newPos + UDim2.new(0, 125, 0, 52)
+    end
+
+    KillFarmButton.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = KillFarmButton.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    KillFarmButton.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+
+    ---------------------------------------------------------------------
+    -- XỬ LÝ SỰ KIỆN CLICK CHUYỂN ĐỔI CHẾ ĐỘ
+    ---------------------------------------------------------------------
+    -- Bấm vào text xám "Relocate the farm" để mở/đóng menu chọn
+    RelocateLabel.MouseButton1Click:Connect(function()
+        menuOpen = not menuOpen
+        ModeMenuFrame.Visible = menuOpen
+    end)
+
+    -- Bấm nút Farm Behind
+    FarmBehindButton.MouseButton1Click:Connect(function()
+        attackMode = "Normal"
+        updateGuiStyles()
+    end)
+
+    -- Bấm nút Farm Down
+    FarmDownButton.MouseButton1Click:Connect(function()
+        attackMode = "Under"
+        updateGuiStyles()
+    end)
+
+    ---------------------------------------------------------------------
+    -- VỊ TRÍ VÙNG AN TOÀN & THÔNG BÁO (GIỮ NGUYÊN)
+    ---------------------------------------------------------------------
+    local SAFE_ZONE_POSITION = Vector3.new(0, 1500, 0)
+
+    local function showNotification(title, text, duration)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = title,
+                Text = text,
+                Duration = duration,
+            })
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- CÁC HÀM TÀNG HÌNH & ẨN TÊN (GIỮ NGUYÊN)
+    ---------------------------------------------------------------------
+    local function setCharacterVisibility(visible)
+        local char = LocalPlayer.Character
+        if not char then return end
+        if not visible then
+            originalTransparencies = {}
+            for _, part in pairs(char:GetDescendants()) do
+                if part:IsA("BasePart") or part:IsA("Decal") then
+                    originalTransparencies[part] = part.Transparency
+                    part.Transparency = 1
+                end
+            end
+        else
+            for part, trans in pairs(originalTransparencies) do
+                if part and part.Parent then
+                    part.Transparency = trans
+                end
+            end
+            originalTransparencies = {}
+        end
+    end
+
+    local function setCharacterNameTag(visible)
+        local char = LocalPlayer.Character
+        if not char then return end
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not visible then
+            originalNameDistances = {}
+            if humanoid then
+                originalNameDistances[humanoid] = {
+                    Display = humanoid.NameDisplayDistance,
+                    Health = humanoid.HealthDisplayDistance
+                }
+                humanoid.NameDisplayDistance = 0
+                humanoid.HealthDisplayDistance = 0
+            end
+            for _, v in pairs(char:GetDescendants()) do
+                if v:IsA("BillboardGui") then
+                    v.Enabled = false
+                end
+            end
+        else
+            if humanoid and originalNameDistances[humanoid] then
+                humanoid.NameDisplayDistance = originalNameDistances[humanoid].Display
+                humanoid.HealthDisplayDistance = originalNameDistances[humanoid].Health
+            end
+            for _, v in pairs(char:GetDescendants()) do
+                if v:IsA("BillboardGui") then
+                    v.Enabled = true
+                end
+            end
+            originalNameDistances = {}
+        end
+    end
+
+    ---------------------------------------------------------------------
+    -- KIỂM TRA TARGET & TÌM NGƯỜI GẦN NHẤT (GIỮ NGUYÊN)
+    ---------------------------------------------------------------------
+    local function isValidTarget(char)
+        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
+            local targetPlayer = Players:GetPlayerFromCharacter(char)
+            if not targetPlayer then return false end
+            if char.Humanoid.Health > 0 and char.HumanoidRootPart.Parent ~= nil and char:IsDescendantOf(workspace) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function getClosestTarget()
+        local myCharacter = LocalPlayer.Character
+        if not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then return nil end
+        local myHRP = myCharacter.HumanoidRootPart
+        local closestPlayer = nil
+        local shortestDistance = math.huge
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character and
+               player.Character:FindFirstChild("HumanoidRootPart") and
+               player.Character:FindFirstChild("Humanoid") and
+               player.Character.Humanoid.Health > 0 and
+               player.Character:IsDescendantOf(workspace) then
+                local targetHRP = player.Character.HumanoidRootPart
+                local distance = (myHRP.Position - targetHRP.Position).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestPlayer = player.Character
+                end
+            end
+        end
+        return closestPlayer
+    end
+
+    local function autoAttack()
+        local myCharacter = LocalPlayer.Character
+        if myCharacter then
+            local tool = myCharacter:FindFirstChildOfClass("Tool")
+            if tool then tool:Activate() end
+        end
+    end
+
+    local function unfreezeCharacter()
+        local character = LocalPlayer.Character
+        if character then
+            local humanoid = character:FindFirstChild("Humanoid")
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if hrp then hrp.Anchored = false end
+            if humanoid then humanoid.PlatformStand = false end
+        end
+    end
+
+    local function stopFarmLogic()
+        if farmConnection then
+            farmConnection:Disconnect()
+            farmConnection = nil
+        end
+        currentTarget = nil
+        setCharacterVisibility(true)
+        setCharacterNameTag(true)
+    end
+
+    ---------------------------------------------------------------------
+    -- KỊCH BẢN CHẠY TRỐN VÙNG AN TOÀN (GIỮ NGUYÊN)
+    ---------------------------------------------------------------------
+    local function handleSafeEvade(myHRP, myHumanoid)
+        isSafeEvading = true
+        isTrending = false
+        myHRP.CFrame = CFrame.new(SAFE_ZONE_POSITION)
+        
+        safePlatform = Instance.new("Part")
+        safePlatform.Name = "KillFarmSafePlatform"
+        safePlatform.Size = Vector3.new(12, 1, 12)
+        safePlatform.Position = SAFE_ZONE_POSITION - Vector3.new(0, 2, 0)
+        safePlatform.Anchored = true
+        safePlatform.CanCollide = true
+        safePlatform.Parent = workspace
+        
+        showNotification("CẢNH BÁO Nguy Hiểm", "Máu dưới 15. Đang rút lui lên độ cao 1500...", 4)
+        
+        task.wait(0.5)
+        stopFarmLogic()
+        if ScreenGui then ScreenGui:Destroy() end
+        
+        task.wait(0.5)
+        local startTime = os.clock()
+        local freezeConnection
+        freezeConnection = RunService.Heartbeat:Connect(function()
+            if os.clock() - startTime < 20 and myHumanoid.Health > 0 then
+                myHRP.CFrame = CFrame.new(SAFE_ZONE_POSITION)
+                myHRP.Anchored = true
+            else
+                freezeConnection:Disconnect()
+            end
+        end)
+        
+        task.delay(20, function()
+            if myHumanoid and myHumanoid.Health > 0 then
+                showNotification("Hệ Thống", "Đã hết 20 giây! Đang tiến hành Reset...", 3)
+                unfreezeCharacter()
+                if safePlatform then safePlatform:Destroy() safePlatform = nil end
+                myHumanoid.Health = 0
+            else
+                unfreezeCharacter()
+                if safePlatform then safePlatform:Destroy() safePlatform = nil end
+            end
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- VÒNG LẶP FARM HOẠT ĐỘNG THEO CHẾ ĐỘ CHỌN
+    ---------------------------------------------------------------------
+    local function startFarm()
+        isTrending = true
+        isSafeEvading = false
+        updateGuiStyles()
+        
+        showNotification("Thông Báo Script", "Bản Script Auto Farm Đã Kích Hoạt", 4)
+        currentTarget = getClosestTarget()
+        setCharacterVisibility(false)
+        setCharacterNameTag(false)
+        
+        farmConnection = RunService.Heartbeat:Connect(function()
+            local currentChar = LocalPlayer.Character
+            if not currentChar or not currentChar:FindFirstChild("HumanoidRootPart") or not currentChar:FindFirstChild("Humanoid") then return end
+            
+            local myHRP = currentChar.HumanoidRootPart
+            local myHumanoid = currentChar.Humanoid
+            local currentHealth = myHumanoid.Health
+            
+            -- ĐIỀU KIỆN TỰ RESET HOẶC DIE BẤT NGỜ MÁU TỤT XUỐNG 0 -> TỰ ĐỘNG TẮT CHỨC NĂNG FARM HOÀN TOÀN
+            if currentHealth <= 0 then
+                isTrending = false
+                stopFarmLogic()
+                updateGuiStyles()
+                if farmConnection then farmConnection:Disconnect() farmConnection = nil end
+                return
+            end
+
+            -- Kiểm tra máu dưới 15
+            if currentHealth < 15 and currentHealth > 0 and not isSafeEvading then
+                handleSafeEvade(myHRP, myHumanoid)
+                return
+            end
+            
+            if isSafeEvading then return end
+            
+            if not isValidTarget(currentTarget) then
+                currentTarget = getClosestTarget()
+            end
+            
+            -- THỰC THI DI CHUYỂN THEO CHẾ ĐỘ ĐÃ CHỌN TRÊN MENU
+            if currentTarget and currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+                local targetHRP = currentTarget.HumanoidRootPart
+                
+                if attackMode == "Under" then
+                    -- Farm Down: player sẽ tp dưới chân mọi người chơi (Hạ thấp CFrame trục Y 3.5 studs)
+                    myHRP.CFrame = CFrame.new(targetHRP.Position - Vector3.new(0, 3.5, 0), targetHRP.Position)
+                else
+                    -- Farm Behind: Bám sát đằng sau lưng mục tiêu (Mã gốc cũ của bạn)
+                    local backPosition = targetHRP.Position - (targetHRP.CFrame.LookVector * 2.5)
+                    myHRP.CFrame = CFrame.new(backPosition, targetHRP.Position)
+                end
+                autoAttack()
+            end
+        end)
+    end
+
+    ---------------------------------------------------------------------
+    -- NÚT BẬT / TẮT TRÊN GUI CHÍNH (SỬ DỤNG MOUSEBUTTON1CLICK CŨ)
+    ---------------------------------------------------------------------
+    KillFarmButton.MouseButton1Click:Connect(function()
+        if isTrending then
+            isTrending = false
+            showNotification("Thông Báo Script", "Đã Tắt Auto Farm", 3)
+            isSafeEvading = false
+            unfreezeCharacter()
+            stopFarmLogic()
+            updateGuiStyles()
+        else
+            startFarm()
+        end
+    end)
+    
+    -- Lắng nghe trực tiếp sự kiện Died của nhân vật để dập ngay lập tức kịch bản farm khi bị hạ gục
+    task.spawn(function()
+        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        local hum = char:WaitForChild("Humanoid")
+        hum.Died:Connect(function()
+            isTrending = false
+            stopFarmLogic()
+            updateGuiStyles()
+        end)
+    end)
+
+    if autoStart then
+        startFarm()
+    end
+end
+
+---------------------------------------------------------------------
+-- CHẠY LẦN ĐẦU KHI KHỞI ĐỘNG SCRIPT
+---------------------------------------------------------------------
+InitKillFarmScript(false)
+
+---------------------------------------------------------------------
+-- TỰ ĐỘNG HIỆN LẠI GUI VÀ LOAD LẠI SCRIPT KHI HỒI SINH CHẾT
+---------------------------------------------------------------------
+_G.CharacterAddedConnection = LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1.2)
+    local oldGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("KillFarmGui")
+    if oldGui then oldGui:Destroy() end
+    InitKillFarmScript(true)
+end)
