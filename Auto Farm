@@ -427,8 +427,8 @@ local function InitKillFarmScript(autoStart)
                 local targetHRP = currentTarget.HumanoidRootPart
                 
                 if attackMode == "Under" then
-                    -- Farm Down: player sẽ tp dưới chân mọi người chơi (Hạ thấp CFrame trục Y 3.5 studs)
-                    myHRP.CFrame = CFrame.new(targetHRP.Position - Vector3.new(0, 3.5, 0), targetHRP.Position)
+                    -- Farm Down: Đã chỉnh khoảng cách thấp xuống đúng bằng 1 stud
+                    myHRP.CFrame = CFrame.new(targetHRP.Position - Vector3.new(0, 1.0, 0), targetHRP.Position)
                 else
                     -- Farm Behind: Bám sát đằng sau lưng mục tiêu (Mã gốc cũ của bạn)
                     local backPosition = targetHRP.Position - (targetHRP.CFrame.LookVector * 2.5)
